@@ -37,12 +37,15 @@ const fs = require('fs');
 const PixelDiff = require('pixel-diff');
 const PNG = require('pngjs').PNG;
 const resizeImg = require('resize-img');
-
+const CHROME_VERSION = "41.0.2272.96";
+const USER_AGENT = `Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)`;
 const DEFAULT_VIEWPORT = {
-  width: 1000,
-  height: 2000,
+  width: 393,
+  height: 851,
   deviceScaleFactor: 1,
 };
+
+const wait = (duration) => new Promise((resolve) => setTimeout(resolve, duration));
 
 const PNG_NOSCROLL_FILENAME = 'page_noscroll.png';
 const PNG_SCROLL_FILENAME = 'page_scroll.png';
@@ -125,8 +128,26 @@ async function screenshotPageWithoutScroll(url) {
   //   });
   // });
 
+  await page.setUserAgent(USER_AGENT)
   await page.goto(url, {waitUntil: 'networkidle2'});
-  await page.waitFor(WAIT_FOR); // Wait a bit more in case other things are loading.
+  await wait(WAIT_FOR); // Wait a bit more in case other things are loading.
+  // await waitForNetworkIdle(page, 'networkidle0'); // wait for network to be idle.
+  const buffer = await page.screenshot({
+    path: argv.save ? argv.noscroll : null,
+    fullPage: true
+  });
+  await context.close();
+  return buffer;
+}
+
+async function screenshotPageWithoutJs(url) {
+  const context = await browser.createIncognitoBrowserContext();
+
+  const page = await context.newPage();
+  await page.setJavaScriptEnabled(false);
+  await page.setUserAgent(USER_AGENT)
+  await page.goto(url, {waitUntil: 'networkidle2'});
+  await wait(WAIT_FOR); // Wait a bit more in case other things are loading.
   // await waitForNetworkIdle(page, 'networkidle0'); // wait for network to be idle.
   const buffer = await page.screenshot({
     path: argv.save ? argv.noscroll : null,
@@ -140,6 +161,7 @@ async function screenshotPageAfterScroll(url) {
   const context = await browser.createIncognitoBrowserContext();
 
   const page = await context.newPage();
+  await page.setUserAgent(USER_AGENT)
   await page.goto(url, {waitUntil: 'networkidle2'});
 
   await page.evaluate(() => {
@@ -156,7 +178,7 @@ async function screenshotPageAfterScroll(url) {
     scroll();
   });
 
-  await page.waitFor(WAIT_FOR); // Wait a bit more in case other things are loading.
+  await wait(WAIT_FOR); // Wait a bit more in case other things are loading.
   // await waitForNetworkIdle(page, 'networkidle0'); // wait for network to be idle.
 
   // const maxScrollHeight = await page.evaluate(
@@ -185,9 +207,10 @@ async function resizeImage(pngBuffer, scale = 0.5) {
 // the unscrolled page.
 let {screenshot: screenshotB} = await screenshotPageAfterScroll(argv.url);
 let screenshotA = await screenshotPageWithoutScroll(argv.url);
-
+let screenshotC = await screenshotPageWithoutJs(argv.url);
 let pngA = PNG.sync.read(screenshotA);
 let pngB = PNG.sync.read(screenshotB);
+let pngC = PNG.sync.read(screenshotC);
 // const sameDimensions = pngA.height === pngB.height && pngA.width === pngB.width;
 
 const diff = new PixelDiff({
@@ -213,13 +236,16 @@ const passed = diff.hasPassed(result.code);// && sameDimensions;
 console.log(`Lazy images loaded correctly: ${passed ? 'Passed' : 'Failed'}`);
 console.log(`Found ${result.differences} pixels differences.`);
 
-({png: pngA, buffer: screenshotA} = await resizeImage(screenshotA, 0.25));
-({png: pngB, buffer: screenshotB} = await resizeImage(screenshotB, 0.25));
+const scaleFactor = 0.5;
+({png: pngA, buffer: screenshotA} = await resizeImage(screenshotA, scaleFactor));
+({png: pngB, buffer: screenshotB} = await resizeImage(screenshotB, scaleFactor));
+({png: pngB, buffer: screenshotC} = await resizeImage(screenshotC, scaleFactor));
 
 console.log(`Dimension image A: ${pngA.width}x${pngA.height}`);
 console.log(`Dimension image B: ${pngB.width}x${pngB.height}`);
+console.log(`Dimension image C: ${pngC.width}x${pngC.height}`);
 
-const {png: pngDiff, buffer: diffBuffer} = await resizeImage(fs.readFileSync(argv.diff), 0.25);
+const {png: pngDiff, buffer: diffBuffer} = await resizeImage(fs.readFileSync(argv.diff), scaleFactor);
 
 const page = await browser.newPage();
 await page.setContent(`
@@ -308,19 +334,24 @@ await page.setContent(`
             <p class="summary">This is how the lazy loaded images on your page appear to a search engine.
             Does it look right? If images are missing, they might be lazy loaded
             using scroll events.</p>
-            <img src="data:img/png;base64,${screenshotA.toString('base64')}" class="screenshot">
+            <img width="200" src="data:img/png;base64,${screenshotA.toString('base64')}" class="screenshot">
           </div>
           <div>
             <h2>&nbsp;</h2>
             <p class="summary">( difference between two screenshots )</p>
-            <img src="data:img/png;base64,${diffBuffer.toString('base64')}" class="screenshot">
+            <img width="200" src="data:img/png;base64,${diffBuffer.toString('base64')}" class="screenshot">
           </div>
           <div>
             <h2>Page after scrolling</h2>
             <p class="summary">If there are more images in the screenshot below,
             the page is using scroll events to lazy load images. Instead, consider using another approach like
             IntersectionObserver.</p>
-            <img src="data:img/png;base64,${screenshotB.toString('base64')}" class="screenshot">
+            <img width="200" src="data:img/png;base64,${screenshotB.toString('base64')}" class="screenshot">
+          </div>
+          <div>
+            <h2>Page without JS</h2>
+            <p class="summary">Your page without any javascript executed.</p>
+            <img width="200" src="data:img/png;base64,${screenshotC.toString('base64')}" class="screenshot">
           </div>
         </section>
       </body>
